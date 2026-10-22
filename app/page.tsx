@@ -1,35 +1,85 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Plus, MessageSquare, Settings, Paperclip, Send, Globe, ChevronDown, User } from "lucide-react";
+import { Plus, MessageSquare, Settings, Paperclip, Send, Globe, ChevronDown, User, Bot } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { atomDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 export default function BesaMinimalApp() {
   const [messages, setMessages] = useState<Array<{ sender: string; text: string }>>([]);
   const [input, setInput] = useState("");
   const [isWebSearch, setIsWebSearch] = useState(false);
   const [model, setModel] = useState("BESA Core");
+  const [isGenerating, setIsGenerating] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const simulateStreamingResponse = (fullResponse: string) => {
+    setIsGenerating(true);
+    setMessages((prev) => [...prev, { sender: "besa", text: "" }]);
+
+    let currentIndex = 0;
+    const interval = setInterval(() => {
+      if (currentIndex < fullResponse.length) {
+        const nextChunk = fullResponse.slice(0, currentIndex + 4);
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { sender: "besa", text: nextChunk };
+          return updated;
+        });
+        currentIndex += 4;
+      } else {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { sender: "besa", text: fullResponse };
+          return updated;
+        });
+        clearInterval(interval);
+        setIsGenerating(false);
+      }
+    }, 20);
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() || isGenerating) return;
 
     const userText = input;
     setMessages((prev) => [...prev, { sender: "user", text: userText }]);
     setInput("");
+    setIsGenerating(true);
 
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "besa",
-          text: `BESA AI active. Received: "${userText}". Connected to minimal streaming engine. 🐝`,
+    try {
+      // Python FastAPI backend call
+      const res = await fetch("http://127.0.0.1:8000/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      ]);
-    }, 400);
+        body: JSON.stringify({
+          prompt: userText,
+          model: model,
+          web_search: isWebSearch,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.response) {
+        simulateStreamingResponse(data.response);
+      } else {
+        simulateStreamingResponse("Error: Backend se response nahi mila.");
+      }
+    } catch (err) {
+      simulateStreamingResponse(
+        "❌ **Connection Error**: Python backend se connect nahi ho saka. Make sure Uvicorn `http://127.0.0.1:8000` par run kar raha hai!"
+      );
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -47,7 +97,8 @@ export default function BesaMinimalApp() {
 
           <button
             onClick={() => setMessages([])}
-            className="w-full bg-slate-800/60 hover:bg-slate-800 text-slate-200 text-sm font-medium py-2 px-3 rounded-xl border border-slate-700/50 flex items-center gap-2 transition-all"
+            disabled={isGenerating}
+            className="w-full bg-slate-800/60 hover:bg-slate-800 disabled:opacity-50 text-slate-200 text-sm font-medium py-2 px-3 rounded-xl border border-slate-700/50 flex items-center gap-2 transition-all"
           >
             <Plus size={16} className="text-amber-500" /> New Chat
           </button>
@@ -111,10 +162,44 @@ export default function BesaMinimalApp() {
                   className={`max-w-2xl text-sm leading-relaxed ${
                     msg.sender === "user"
                       ? "bg-slate-800 text-slate-100 px-4 py-2.5 rounded-2xl rounded-tr-none"
-                      : "text-slate-200 pt-1"
+                      : "text-slate-200 pt-1 w-full"
                   }`}
                 >
-                  {msg.text}
+                  {msg.sender === "user" ? (
+                    msg.text
+                  ) : (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        code({ node, inline, className, children, ...props }: any) {
+                          const match = /language-(\w+)/.exec(className || "");
+                          return !inline && match ? (
+                            <SyntaxHighlighter
+                              style={atomDark as any}
+                              language={match[1]}
+                              PreTag="div"
+                              customStyle={{
+                                margin: "1em 0",
+                                borderRadius: "0.75rem",
+                                padding: "1rem",
+                                backgroundColor: "#0F141C",
+                                border: "1px solid rgba(255, 255, 255, 0.08)",
+                              }}
+                              {...props}
+                            >
+                              {String(children).replace(/\n$/, "")}
+                            </SyntaxHighlighter>
+                          ) : (
+                            <code className="bg-slate-800 px-1.5 py-0.5 rounded text-amber-400 text-xs font-mono" {...props}>
+                              {children}
+                            </code>
+                          );
+                        },
+                      }}
+                    >
+                      {msg.text}
+                    </ReactMarkdown>
+                  )}
                 </div>
               </div>
             ))
@@ -129,7 +214,8 @@ export default function BesaMinimalApp() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), handleSend())}
               placeholder="Ask BESA..."
-              className="w-full bg-transparent text-slate-100 placeholder-slate-500 resize-none focus:outline-none text-sm min-h-[40px] max-h-[120px] px-2 pt-1"
+              disabled={isGenerating}
+              className="w-full bg-transparent text-slate-100 placeholder-slate-500 resize-none focus:outline-none text-sm min-h-[40px] max-h-[120px] px-2 pt-1 disabled:opacity-50"
             />
             <div className="flex items-center justify-between pt-2 px-1">
               <div className="flex items-center gap-1.5">
@@ -149,7 +235,7 @@ export default function BesaMinimalApp() {
               </div>
               <button
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={!input.trim() || isGenerating}
                 className="p-2 rounded-xl bg-amber-500 disabled:opacity-30 disabled:bg-slate-800 text-slate-950 font-bold transition-all"
               >
                 <Send size={14} />
